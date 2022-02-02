@@ -630,7 +630,7 @@ _sgemm_kernel_m1_fp32_m8n8k4:
 .sk_m8n8k4_loopm:                // loop m
     mov x9, x1                   // x9:  b_loc
     subs x10, x4, #8             // x10: n - 8
-    be .sk_m8n8k4_loopm_leftn    // x10: if (n - 8 == 0)
+    beq .sk_m8n8k4_loopm_leftn    // x10: if (n - 8 == 0)
 .sk_m8n8k4_loopm_loopn:          // loop n
     SGEMM_KERNEL_M8N12K4_M1_LOOPK
     subs x10, x10, #12           // x10: n -= 12
@@ -655,7 +655,7 @@ _sgemm_kernel_m1_fp32_m8n4k4:
 .sk_m8n4k4_loopm:                // loop m
     mov x9, x1                   // x9:  b_loc
     subs x10, x4, #4             // x10: n - 4
-    be .sk_m8n4k4_loopm_leftn    // x10: if (n - 4 == 0)
+    beq .sk_m8n4k4_loopm_leftn    // x10: if (n - 4 == 0)
 .sk_m8n4k4_loopm_loopn:          // loop n
     SGEMM_KERNEL_M8N12K4_M1_LOOPK
     subs x10, x10, #12           // x10: n -= 12
@@ -678,7 +678,7 @@ _sgemm_kernel_m1_fp32_m4n12k4:
 // param x5: k
     preserve_caller_vec
     subs x3, x3, #4              // x3:  m - 4
-    be .sk_m4n12k4_leftm         // x3:  if (m - 4 == 0)
+    beq .sk_m4n12k4_leftm         // x3:  if (m - 4 == 0)
 .sk_m4n12k4_loopm:               // l1:  loop m
     mov x9, x1                   // x9:  b_loc
     mov x10, x4                  // x10: n
@@ -709,11 +709,11 @@ _sgemm_kernel_m1_fp32_m4n8k4:
 // param x5: k
     preserve_caller_vec
     subs x3, x3, #4              // x3:  m - 4
-    be .sk_m4n8k4_leftm          // x3:  if (m - 4 == 0)
+    beq .sk_m4n8k4_leftm          // x3:  if (m - 4 == 0)
 .sk_m4n8k4_loopm:                // loop m
     mov x9, x1                   // x9:  b_loc
     subs x10, x4, #8             // x10: n - 8
-    be .sk_m4n8k4_loopm_leftn    // x10: if (n - 8 == 0)
+    beq .sk_m4n8k4_loopm_leftn    // x10: if (n - 8 == 0)
 .sk_m4n8k4_loopm_loopn:          // loop n
     SGEMM_KERNEL_M8N12K4_M1_LOOPK
     subs x10, x10, #12           // x10: n -= 12
@@ -726,7 +726,7 @@ _sgemm_kernel_m1_fp32_m4n8k4:
 .sk_m4n8k4_leftm:
     mov x9, x1                   // x9:  b_loc
     subs x10, x4, #8             // x10: n - 8
-    be .sk_m4n8k4_leftm_leftn    // x10: if (n - 8 == 0)
+    beq .sk_m4n8k4_leftm_leftn    // x10: if (n - 8 == 0)
 .sk_m4n8k4_leftm_loopn:          // loop n
     SGEMM_KERNEL_M4N12K4_M1_LOOPK
     subs x10, x10, #12           // x10: n -= 12
@@ -746,11 +746,11 @@ _sgemm_kernel_m1_fp32_m4n4k4:
 // param x5: k
     preserve_caller_vec
     subs x3, x3, #4              // x3:  m - 4
-    be .sk_m4n4k4_leftm          // x3:  if (m - 4 == 0)
+    beq .sk_m4n4k4_leftm          // x3:  if (m - 4 == 0)
 .sk_m4n4k4_loopm:                // loop m
     mov x9, x1                   // x9:  b_loc
     subs x10, x4, #4             // x10: n - 4
-    be .sk_m4n4k4_loopm_leftn    // x10: if (n - 4 == 0)
+    beq .sk_m4n4k4_loopm_leftn    // x10: if (n - 4 == 0)
 .sk_m4n4k4_loopm_loopn:          // loop n
     SGEMM_KERNEL_M8N12K4_M1_LOOPK
     subs x10, x10, #12           // x10: n -= 12
@@ -763,7 +763,7 @@ _sgemm_kernel_m1_fp32_m4n4k4:
 .sk_m4n4k4_leftm:
     mov x9, x1                   // x9:  b_loc
     subs x10, x4, #4             // x10: n - 4
-    be .sk_m4n4k4_leftm_leftn    // x10: if (n - 4 == 0)
+    beq .sk_m4n4k4_leftm_leftn    // x10: if (n - 4 == 0)
 .sk_m4n4k4_leftm_loopn:          // loop n
     SGEMM_KERNEL_M4N12K4_M1_LOOPK
     subs x10, x10, #12           // x10: n -= 12

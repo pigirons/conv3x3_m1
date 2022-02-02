@@ -1,14 +1,13 @@
 #define _GNU_SOURCE
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <sys/time.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sched.h>
 #include <pthread.h>
 
-extern void sgemm_kernel_aarch64_fp32_m8n12(
-    float *,
+void sgemm_kernel_fp32_m1(float *,
     float *,
     float *,
     int,
@@ -38,7 +37,7 @@ static double get_time(struct timeval *start, struct timeval *end)
 static void trans_a(float *src, int m, int k, float *dst)
 {
     int i, j;
-    for (i = 0; i < m; i += 8)
+    for (i = 0; i <= m - 8; i += 8)
     {
         float *ps = src + i * k;
         float *pd = dst + i * k;
@@ -54,12 +53,29 @@ static void trans_a(float *src, int m, int k, float *dst)
             pd[j * 8 + 7] = ps[7 * k + j];
         }
     }
+    if (m - i == 4)
+    {
+        float *ps = src + i * k;
+        float *pd = dst + i * k;
+        for (j = 0; j < k; j++)
+        {
+            pd[j * 4 + 0] = ps[0 * k + j];
+            pd[j * 4 + 1] = ps[1 * k + j];
+            pd[j * 4 + 2] = ps[2 * k + j];
+            pd[j * 4 + 3] = ps[3 * k + j];
+        }
+    }
+    else if (m != i)
+    {
+        fprintf(stderr, "ERROR: m must be multiple of 4.\n");
+        exit(0);
+    }
 }
 
 static void trans_b(float *src, int k, int n, float *dst)
 {
     int i, j;
-    for (i = 0; i < n; i += 12)
+    for (i = 0; i <= n - 12; i += 12)
     {
         float *ps = src + i;
         for (j = 0; j < k; j++)
@@ -69,14 +85,39 @@ static void trans_b(float *src, int k, int n, float *dst)
             dst += 12;
         }
     }
+    if (n - i == 8)
+    {
+        float *ps = src + i;
+        for (j = 0; j < k; j++)
+        {
+            memcpy(dst, ps, 8 * sizeof(float));
+            ps += n;
+            dst += 8;
+        }
+    }
+    else if (n - i == 4)
+    {
+        float *ps = src + i;
+        for (j = 0; j < k; j++)
+        {
+            memcpy(dst, ps, 4 * sizeof(float));
+            ps += n;
+            dst += 4;
+        }
+    }
+    else if (n != i)
+    {
+        fprintf(stderr, "ERROR: n must be multiple of 4.\n");
+        exit(0);
+    }
 }
 
 static void trans_c(float *src, int m, int n, float *dst)
 {
     int i, j, ii;
-    for (i = 0; i < m; i += 8)
+    for (i = 0; i <= m - 8; i += 8)
     {
-        for (j = 0; j < n; j += 12)
+        for (j = 0; j <= n - 12; j += 12)
         {
             float *pd = dst + i * n + j;
             for (ii = 0; ii < 8; ii++)
@@ -86,6 +127,74 @@ static void trans_c(float *src, int m, int n, float *dst)
                 pd += n;
             }
         }
+        if (n - j == 8)
+        {
+            float *pd = dst + i * n + j;
+            for (ii = 0; ii < 8; ii++)
+            {
+                memcpy(pd, src, 8 * sizeof(float));
+                src += 8;
+                pd += n;
+            }
+        }
+        else if (n - j == 4)
+        {
+            float *pd = dst + i * n + j;
+            for (ii = 0; ii < 8; ii++)
+            {
+                memcpy(pd, src, 4 * sizeof(float));
+                src += 4;
+                pd += n;
+            }
+        }
+        else if (n != j)
+        {
+            fprintf(stderr, "ERROR: n must be multiple of 4.\n");
+            exit(0);
+        }
+    }
+    if (m - i == 4)
+    {
+        for (j = 0; j <= n - 12; j += 12)
+        {
+            float *pd = dst + i * n + j;
+            for (ii = 0; ii < 4; ii++)
+            {
+                memcpy(pd, src, 12 * sizeof(float));
+                src += 12;
+                pd += n;
+            }
+        }
+        if (n - j == 8)
+        {
+            float *pd = dst + i * n + j;
+            for (ii = 0; ii < 4; ii++)
+            {
+                memcpy(pd, src, 8 * sizeof(float));
+                src += 8;
+                pd += n;
+            }
+        }
+        else if (n - j == 4)
+        {
+            float *pd = dst + i * n + j;
+            for (ii = 0; ii < 4; ii++)
+            {
+                memcpy(pd, src, 4 * sizeof(float));
+                src += 4;
+                pd += n;
+            }
+        }
+        else if (n != j)
+        {
+            fprintf(stderr, "ERROR: n must be multiple of 4.\n");
+            exit(0);
+        }
+    }
+    else if (m != i)
+    {
+        fprintf(stderr, "ERROR: m must be multiple of 4.\n");
+        exit(0);
     }
 }
 
@@ -140,7 +249,7 @@ int main(int argc, char *argv[])
 
     float *a, *b, *c;
     float *at, *bt, *ct;
-    
+
     a = (float*)alignAlloc(m * k * sizeof(float), 16);
     b = (float*)alignAlloc(k * n * sizeof(float), 16);
     c = (float*)alignAlloc(m * n * sizeof(float), 16);
@@ -153,7 +262,7 @@ int main(int argc, char *argv[])
     {
         b[i] = (float)rand() / RAND_MAX;
     }
-    
+
     at = (float*)alignAlloc(m * k * sizeof(float), 16);
     bt = (float*)alignAlloc(k * n * sizeof(float), 16);
     ct = (float*)alignAlloc(m * n * sizeof(float), 16);
@@ -164,13 +273,13 @@ int main(int argc, char *argv[])
     // warm up
     for (i = 0; i < loop_time; i++)
     {
-        sgemm_kernel_aarch64_fp32_m8n12(at, bt, ct, m, n, k);
+        sgemm_kernel_fp32_m1(at, bt, ct, m, n, k);
     }
-    
+
     gettimeofday(&start, NULL);
     for (i = 0; i < loop_time; i++)
     {
-        sgemm_kernel_aarch64_fp32_m8n12(at, bt, ct, m, n, k);
+        sgemm_kernel_fp32_m1(at, bt, ct, m, n, k);
     }
     gettimeofday(&end, NULL);
 
@@ -183,7 +292,7 @@ int main(int argc, char *argv[])
     save_bin(c, m * n, "naive.bin");
 
     memset(ct, 0, m * n * sizeof(float));
-    sgemm_kernel_aarch64_fp32_m8n12(at, bt, ct, m, n, k);
+    sgemm_kernel_fp32_m1(at, bt, ct, m, n, k);
     trans_c(ct, m, n, c);
     save_bin(c, m * n, "tuned.bin");
 
