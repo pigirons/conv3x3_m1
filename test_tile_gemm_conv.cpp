@@ -34,6 +34,94 @@ static void save_bin(float *a, int n, const char *file_name)
     fclose(fp);
 }
 
+static void conv_naive(float *src,
+    int src_h,
+    int src_w,
+    int in_c,
+    int pad_h,
+    int pad_w,
+    int out_c,
+    float *filter,
+    float *bias,
+    float *dst)
+{
+    int src_pad_h = src_h + 2 * pad_h;
+    int src_pad_w = src_w + 2 * pad_w;
+    int dst_pad_h = src_pad_h - 3 + 1;
+    int dst_pad_w = src_pad_w - 3 + 1;
+
+    float *src_trans;
+    if (pad_h == 0 && pad_w == 0)
+    {
+        src_trans = src;
+    }
+    else
+    {
+        src_trans = (float*)alignAlloc(src_pad_h * src_pad_w * in_c * sizeof(float), 16);
+        float *p_src = src_trans;
+        if (pad_h > 0)
+        {
+            for (int i = 0; i < in_c; i++)
+            {
+                memset(p_src, 0, pad_h * src_pad_w * sizeof(float));
+                p_src += pad_h * src_pad_w;
+
+                for (int j = 0; j < src_h; j++)
+                {
+                    for (int k = 0; k < pad_w; k++)
+                    {
+                        *p_src++ = 0.0f;
+                    }
+
+                    memcpy(p_src, src, src_w * sizeof(float));
+                    p_src += src_w;
+                    src += src_w;
+
+                    for (int k = 0; k < pad_w; k++)
+                    {
+                        *p_src++ = 0.0f;
+                    }
+                }
+
+                memset(p_src, 0, pad_h * src_pad_w * sizeof(float));
+                p_src += pad_h * src_pad_w;
+            }
+        }
+    }
+
+    for (int i = 0; i < out_c; i++)
+    {
+        for (int j = 0; j < dst_pad_h; j++)
+        {
+            for (int k = 0; k < dst_pad_w; k++)
+            {
+                float *p_src = src_trans + j * src_pad_w + k;
+                float rst = bias[i];
+
+                for (int ii = 0; ii < in_c; ii++)
+                {
+                    rst += p_src[ii * src_pad_h * src_pad_w + 0 * src_pad_w + 0] * filter[ii * 9 + 0];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 0 * src_pad_w + 1] * filter[ii * 9 + 1];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 0 * src_pad_w + 2] * filter[ii * 9 + 2];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 1 * src_pad_w + 0] * filter[ii * 9 + 3];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 1 * src_pad_w + 1] * filter[ii * 9 + 4];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 1 * src_pad_w + 2] * filter[ii * 9 + 5];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 2 * src_pad_w + 0] * filter[ii * 9 + 6];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 2 * src_pad_w + 1] * filter[ii * 9 + 7];
+                    rst += p_src[ii * src_pad_h * src_pad_w + 2 * src_pad_w + 2] * filter[ii * 9 + 8];
+                }
+                dst[i * dst_pad_h * dst_pad_w + j * dst_pad_w + k] = rst;
+            }
+        }
+        filter += 3 * 3 * in_c;
+    }
+    
+    if (src_trans != src)
+    {
+        alignFree(src_trans);
+    }
+}
+
 int main(int argc, char *argv[])
 {
     if (argc != 8)
@@ -73,7 +161,8 @@ int main(int argc, char *argv[])
     float *filter = (float*)alignAlloc(3 * 3 * in_c * out_c * sizeof(float), 16);
     float *cvt_filter = (float*)alignAlloc(cvt_filter_size, 16);
     float *bias = (float*)alignAlloc(out_c * sizeof(float), 16);
-    float *dst = (float*)alignAlloc(dst_h * dst_w * out_c * sizeof(float), 16);
+    float *dst1 = (float*)alignAlloc(dst_h * dst_w * out_c * sizeof(float), 16);
+    float *dst2 = (float*)alignAlloc(dst_h * dst_w * out_c * sizeof(float), 16);
     void *buffer = alignAlloc(buf_size, 16);
 
     for (i = 0; i < src_h * src_w * in_c; i++)
@@ -94,14 +183,14 @@ int main(int argc, char *argv[])
     for (i = 0; i < loop_time; i++)
     {
         conv_tile_gemm_f3s1_m1(src, src_h, src_w, in_c,
-            pad_h, pad_w, cvt_filter, bias, out_c, buffer, dst);
+            pad_h, pad_w, cvt_filter, bias, out_c, buffer, dst2);
     }
 
     gettimeofday(&start, NULL);
     for (i = 0; i < loop_time; i++)
     {
         conv_tile_gemm_f3s1_m1(src, src_h, src_w, in_c,
-            pad_h, pad_w, cvt_filter, bias, out_c, buffer, dst);
+            pad_h, pad_w, cvt_filter, bias, out_c, buffer, dst2);
     }
     gettimeofday(&end, NULL);
 
@@ -110,16 +199,20 @@ int main(int argc, char *argv[])
 
     printf("tile_gemm conv algo: time = %lfus, perf = %lf GFLOPS.\n", time * 1e6, gflops);
 
-    memset(dst, 0, dst_h * dst_w * out_c * sizeof(float));
+    conv_naive(src, src_h, src_w, in_c, pad_h, pad_w, out_c, filter, bias, dst1);
+    save_bin(dst1, dst_h * dst_w * out_c, "naive.bin");
+    
+    memset(dst2, 0, dst_h * dst_w * out_c * sizeof(float));
     conv_tile_gemm_f3s1_m1(src, src_h, src_w, in_c,
-        pad_h, pad_w, cvt_filter, bias, out_c, buffer, dst);
-    save_bin(dst, dst_h * dst_w * out_c, "tuned.bin");
+        pad_h, pad_w, cvt_filter, bias, out_c, buffer, dst2);
+    save_bin(dst2, dst_h * dst_w * out_c, "tuned.bin");
 
     alignFree(src);
     alignFree(filter);
     alignFree(cvt_filter);
     alignFree(bias);
-    alignFree(dst);
+    alignFree(dst1);
+    alignFree(dst2);
     alignFree(buffer);
 
     return 0;
