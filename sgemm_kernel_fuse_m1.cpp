@@ -45,12 +45,12 @@ void sgemm_kernel_m1_fp32_m4n4k4(float *a_loc,
     int k);
 }
 
-void sgemm_kernel_fp32_m1(float *a_loc,
-    float *b_loc,
-    float *c_loc,
-    int m,
+void sgemm_kernel_fp32_m1(int m,
     int n,
-    int k)
+    int k,
+    float *a_loc,
+    float *b_loc,
+    float *c_loc)
 {
     int m_left = m % 8;
     int n_left = n % 12;

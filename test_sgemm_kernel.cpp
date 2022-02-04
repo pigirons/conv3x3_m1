@@ -7,12 +7,12 @@
 #include <sched.h>
 #include <pthread.h>
 
-void sgemm_kernel_fp32_m1(float *,
-    float *,
-    float *,
+void sgemm_kernel_fp32_m1(int,
     int,
     int,
-    int);
+    float *,
+    float *,
+    float *);
 
 static void* alignAlloc(size_t size, size_t alignment)
 {
@@ -273,13 +273,13 @@ int main(int argc, char *argv[])
     // warm up
     for (i = 0; i < loop_time; i++)
     {
-        sgemm_kernel_fp32_m1(at, bt, ct, m, n, k);
+        sgemm_kernel_fp32_m1(m, n, k, at, bt, ct);
     }
 
     gettimeofday(&start, NULL);
     for (i = 0; i < loop_time; i++)
     {
-        sgemm_kernel_fp32_m1(at, bt, ct, m, n, k);
+        sgemm_kernel_fp32_m1(m, n, k, at, bt, ct);
     }
     gettimeofday(&end, NULL);
 
@@ -292,7 +292,7 @@ int main(int argc, char *argv[])
     save_bin(c, m * n, "naive.bin");
 
     memset(ct, 0, m * n * sizeof(float));
-    sgemm_kernel_fp32_m1(at, bt, ct, m, n, k);
+    sgemm_kernel_fp32_m1(m, n, k, at, bt, ct);
     trans_c(ct, m, n, c);
     save_bin(c, m * n, "tuned.bin");
 

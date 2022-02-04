@@ -53,6 +53,13 @@
     } \
 }
 
+extern void sgemm_kernel_fp32_m1(int m,
+    int n,
+    int k,
+    float *a_loc,
+    float *b_loc,
+    float *c_loc);
+
 int conv_tile_gemm_f3s1_buf_size_m1(int src_h,
     int src_w,
     int channels,
@@ -60,12 +67,10 @@ int conv_tile_gemm_f3s1_buf_size_m1(int src_h,
     int padding_w,
     int num_outs)
 {
-    int src_pad_h =
-        (CONV_TG_REG_N_SIZE - 1) * stride_h + with_hole_flt_h;
-    int src_pad_w =
-        (CONV_TG_REG_N_SIZE - 1) * stride_w + with_hole_flt_w;
+    int src_pad_h = CONV_TG_REG_N_SIZE - 1 + 3;
+    int src_pad_w = CONV_TG_REG_N_SIZE - 1 + 3;
 
-    int flt_size = flt_h * flt_w;
+    int flt_size = 3 * 3;
     int chn_size = CONV_TG_F3_CHN_SIZE;
 
     int k = flt_size * chn_size;
@@ -81,17 +86,12 @@ int conv_tile_gemm_f3s1_buf_size_m1(int src_h,
 
     int buffer_size = MAX_INT(CONV_TG_REG_M_SIZE, flt_size) *
         n_pad * sizeof(float);
+    int src_pad_size = channels * src_pad_h * src_pad_w * sizeof(float);
+    int src_trans_size = k_pad * n_pad * sizeof(float);
+    int dst_trans_size = m_pad * n_pad * sizeof(float);
 
-    int src_pad_size, src_trans_size, dst_trans_size;
-    int block_size = 0, para_size = 0;
-
-    src_pad_size = channels * src_pad_h * src_pad_w * sizeof(float);
-
-    src_trans_size = k_pad * n_pad * sizeof(float);
-    dst_trans_size = m_pad * n_pad * sizeof(float);
-
-    return buffer_size + src_trans_size + block_size +
-        para_size + MAX_INT(src_pad_size, dst_trans_size);
+    return buffer_size + src_trans_size +
+        MAX_INT(src_pad_size, dst_trans_size);
 }
 
 static void conv_tg_flt_one_blk(float *cvt_filters,
@@ -295,7 +295,7 @@ void conv_tile_gemm_f3s1_cvt_filter_m1(float *filters,
     int kt_size = TG_PADDING(k, 4);
 
     conv_tg_blocking_cvt_filter(filters, channels, num_outs, mt_size,
-        chn_size, flt_size, filters_cvt);
+        chn_size, filters_cvt);
 }
 
 static inline bool conv_tg_blocking_image(float *src,
@@ -320,9 +320,9 @@ static inline bool conv_tg_blocking_image(float *src,
     }
 
     real_dst_h = MIN_INT(vert_end - h_idx,
-        CONV_TG_F3ST1_SRC_SIZE);
+        CONV_TG_F3S1_SRC_SIZE);
     real_dst_w = MIN_INT(hori_end - w_idx,
-        CONV_TG_F3ST1_SRC_SIZE);
+        CONV_TG_F3S1_SRC_SIZE);
 
     int h_beg = MAX_INT(h_idx, 0);
     int h_end = MIN_INT(h_idx + real_dst_h, src_h);
@@ -380,7 +380,7 @@ static inline bool conv_tg_blocking_image(float *src,
     return true;
 }
 
-#define CONV_TG_F3ST1_SRC_TRANS_W12(SRC, DST) \
+#define CONV_TG_F3S1_SRC_TRANS_W12(SRC, DST) \
 { \
     vr[0] = vld1q_f32((SRC) + 0); \
     vr[1] = vld1q_f32((SRC) + 4); \
@@ -390,7 +390,7 @@ static inline bool conv_tg_blocking_image(float *src,
     vst1q_f32((DST) + 8, vr[2]); \
 }
 
-#define CONV_TG_F3ST1_SRC_TRANS_W8(SRC, DST) \
+#define CONV_TG_F3S1_SRC_TRANS_W8(SRC, DST) \
 { \
     vr[0] = vld1q_f32((SRC) + 0); \
     vr[1] = vld1q_f32((SRC) + 4); \
@@ -398,13 +398,13 @@ static inline bool conv_tg_blocking_image(float *src,
     vst1q_f32((DST) + 4, vr[1]); \
 }
 
-#define CONV_TG_F3ST1_SRC_TRANS_W4(SRC, DST) \
+#define CONV_TG_F3S1_SRC_TRANS_W4(SRC, DST) \
 { \
     vr[0] = vld1q_f32((SRC) + 0); \
     vst1q_f32((DST) + 0, vr[0]); \
 }
 
-static void conv_tg_f3st1_src_trans_wmax(float *src_pad,
+static void conv_tg_f3s1_src_trans_wmax(float *src_pad,
     int src_pad_h,
     int channels,
     float *src_trans)
@@ -416,7 +416,7 @@ static void conv_tg_f3st1_src_trans_wmax(float *src_pad,
     int tail = k_pad - k;
 
     int src_trans_h = src_pad_h - 3 + 1;
-    int src_pad_align = src_pad_h * CONV_TG_F3ST1_SRC_SIZE;
+    int src_pad_align = src_pad_h * CONV_TG_F3S1_SRC_SIZE;
 
     float32x4_t vr[3];
     float32x4_t vzero = vdupq_n_f32(0.0f);
@@ -429,17 +429,17 @@ static void conv_tg_f3st1_src_trans_wmax(float *src_pad,
         {
             for (kk = 0; kk < 3; kk++)
             {
-                CONV_TG_F3ST1_SRC_TRANS_W12(
-                    src_pad_d + 0 + CONV_TG_F3ST1_SRC_SIZE * kk,
+                CONV_TG_F3S1_SRC_TRANS_W12(
+                    src_pad_d + 0 + CONV_TG_F3S1_SRC_SIZE * kk,
                     src_trans + CONV_TG_REG_N_SIZE * 0);
-                CONV_TG_F3ST1_SRC_TRANS_W12(
-                    src_pad_d + 1 + CONV_TG_F3ST1_SRC_SIZE * kk,
+                CONV_TG_F3S1_SRC_TRANS_W12(
+                    src_pad_d + 1 + CONV_TG_F3S1_SRC_SIZE * kk,
                     src_trans + CONV_TG_REG_N_SIZE * 1);
-                CONV_TG_F3ST1_SRC_TRANS_W12(
-                    src_pad_d + 2 + CONV_TG_F3ST1_SRC_SIZE * kk,
+                CONV_TG_F3S1_SRC_TRANS_W12(
+                    src_pad_d + 2 + CONV_TG_F3S1_SRC_SIZE * kk,
                     src_trans + CONV_TG_REG_N_SIZE * 2);
 
-                src_trans += 3 * CONV_TG_F3ST1_DST_SIZE;
+                src_trans += 3 * CONV_TG_F3S1_DST_SIZE;
             }
 
             src_pad_d += src_pad_align;
@@ -447,7 +447,7 @@ static void conv_tg_f3st1_src_trans_wmax(float *src_pad,
         CONV_TG_SRC_TRANS_ZERO_W12(src_trans, tail);
 
         src_trans += tail * CONV_TG_REG_N_SIZE;
-        src_pad += CONV_TG_F3ST1_SRC_SIZE;
+        src_pad += CONV_TG_F3S1_SRC_SIZE;
     }
 }
 
@@ -466,7 +466,7 @@ static inline void conv_tg_line_copy(float *src,
     }
 }
 
-static void conv_tg_f3st1_src_trans(float *src_pad,
+static void conv_tg_f3s1_src_trans(float *src_pad,
     int src_pad_h,
     int src_pad_w,
     int channels,
@@ -528,7 +528,7 @@ static void conv_tg_f3st1_src_trans(float *src_pad,
 
             for (kk = 0; kk < 9; kk++)
             {
-                CONV_TG_F3ST1_SRC_TRANS_W12(buffer + n_pad * kk + j,
+                CONV_TG_F3S1_SRC_TRANS_W12(buffer + n_pad * kk + j,
                     st_d + kk * CONV_TG_REG_N_SIZE);
             }
         }
@@ -539,7 +539,7 @@ static void conv_tg_f3st1_src_trans(float *src_pad,
 
             for (kk = 0; kk < 9; kk++)
             {
-                CONV_TG_F3ST1_SRC_TRANS_W8(buffer + n_pad * kk + j,
+                CONV_TG_F3S1_SRC_TRANS_W8(buffer + n_pad * kk + j,
                     st_d + kk * 8);
             }
         }
@@ -550,7 +550,7 @@ static void conv_tg_f3st1_src_trans(float *src_pad,
 
             for (kk = 0; kk < 9; kk++)
             {
-                CONV_TG_F3ST1_SRC_TRANS_W4(buffer + n_pad * kk + j,
+                CONV_TG_F3S1_SRC_TRANS_W4(buffer + n_pad * kk + j,
                     st_d + kk * 4);
             }
         }
@@ -582,7 +582,7 @@ static void conv_tg_f3st1_src_trans(float *src_pad,
     }
 }
 
-#define CONV_TG_F3ST1_DST_TRANS_W12(SRC, LDS, IDX, DST, LDD) \
+#define CONV_TG_F3S1_DST_TRANS_W12(SRC, LDS, IDX, DST, LDD) \
 { \
     vr[0] = vld1q_f32((SRC) + (LDS) * (IDX) + 0); \
     vr[1] = vld1q_f32((SRC) + (LDS) * (IDX) + 4); \
@@ -595,7 +595,7 @@ static void conv_tg_f3st1_src_trans(float *src_pad,
     vst1q_f32((DST) + (IDX) * (LDD) + 8, vr[2]); \
 }
 
-#define CONV_TG_F3ST1_DST_TRANS_W8(SRC, LDS, IDX, DST, LDD) \
+#define CONV_TG_F3S1_DST_TRANS_W8(SRC, LDS, IDX, DST, LDD) \
 { \
     vr[0] = vld1q_f32((SRC) + (LDS) * (IDX) + 0); \
     vr[1] = vld1q_f32((SRC) + (LDS) * (IDX) + 4); \
@@ -605,14 +605,14 @@ static void conv_tg_f3st1_src_trans(float *src_pad,
     vst1q_f32((DST) + (IDX) * (LDD) + 4, vr[1]); \
 }
 
-#define CONV_TG_F3ST1_DST_TRANS_W4(SRC, LDS, IDX, DST, LDD) \
+#define CONV_TG_F3S1_DST_TRANS_W4(SRC, LDS, IDX, DST, LDD) \
 { \
     vr[0] = vld1q_f32((SRC) + (LDS) * (IDX) + 0); \
     vr[0] = vaddq_f32(vr[0], vb[(IDX)]); \
     vst1q_f32((DST) + (IDX) * (LDD) + 0, vr[0]); \
 }
 
-static void conv_tg_f3st1_dst_trans_wmax(float *dst_trans,
+static void conv_tg_f3s1_dst_trans_wmax(float *dst_trans,
     int dst_trans_h,
     int num_outs,
     float *bias,
@@ -639,7 +639,7 @@ static void conv_tg_f3st1_dst_trans_wmax(float *dst_trans,
         {
             for (k = 0; k < CONV_TG_REG_M_SIZE; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W12(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W12(dst_trans,
                     CONV_TG_REG_N_SIZE, k, dst_d, dst_align);
             }
 
@@ -659,7 +659,7 @@ static void conv_tg_f3st1_dst_trans_wmax(float *dst_trans,
         {
             for (k = 0; k < num_outs - i; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W12(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W12(dst_trans,
                     CONV_TG_REG_N_SIZE, k, dst_d, dst_align);
             }
 
@@ -670,7 +670,7 @@ static void conv_tg_f3st1_dst_trans_wmax(float *dst_trans,
     }
 }
 
-static void conv_tg_f3st1_dst_trans(float *dst_trans,
+static void conv_tg_f3s1_dst_trans(float *dst_trans,
     int dst_trans_h,
     int dst_trans_w,
     int num_outs,
@@ -704,7 +704,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
         {
             for (k = 0; k < CONV_TG_REG_M_SIZE; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W12(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W12(dst_trans,
                     CONV_TG_REG_N_SIZE, k, buf_d, n_pad);
             }
 
@@ -716,7 +716,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
         {
             for (k = 0; k < CONV_TG_REG_M_SIZE; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W8(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W8(dst_trans,
                     8, k, buf_d, n_pad);
             }
 
@@ -726,7 +726,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
         {
             for (k = 0; k < CONV_TG_REG_M_SIZE; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W4(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W4(dst_trans,
                     4, k, buf_d, n_pad);
             }
 
@@ -761,7 +761,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
         {
             for (k = 0; k < m; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W12(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W12(dst_trans,
                     CONV_TG_REG_N_SIZE, k, buf_d, n_pad);
             }
 
@@ -772,7 +772,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
         {
             for (k = 0; k < m; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W8(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W8(dst_trans,
                     8, k, buf_d, n_pad);
             }
         }
@@ -780,7 +780,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
         {
             for (k = 0; k < m; k++)
             {
-                CONV_TG_F3ST1_DST_TRANS_W4(dst_trans,
+                CONV_TG_F3S1_DST_TRANS_W4(dst_trans,
                     4, k, buf_d, n_pad);
             }
         }
@@ -799,7 +799,7 @@ static void conv_tg_f3st1_dst_trans(float *dst_trans,
     }
 }
 
-static void conv_tg_f3st1_one_pad_wmax(float *src_pad,
+static void conv_tg_f3s1_one_pad_wmax(float *src_pad,
     int src_pad_h,
     int channels,
     float *src_trans,
@@ -823,54 +823,54 @@ static void conv_tg_f3st1_one_pad_wmax(float *src_pad,
     for (i = 0; i <= channels - CONV_TG_F3_CHN_SIZE;
         i += CONV_TG_F3_CHN_SIZE)
     {
-        conv_tg_f3st1_src_trans_wmax(src_pad,
+        conv_tg_f3s1_src_trans_wmax(src_pad,
             src_pad_h, CONV_TG_F3_CHN_SIZE, src_trans_d);
 
         src_pad += src_pad_h *
-            CONV_TG_F3_CHN_SIZE * CONV_TG_F3ST1_SRC_SIZE;
+            CONV_TG_F3_CHN_SIZE * CONV_TG_F3S1_SRC_SIZE;
         src_trans_d += src_trans_h *
-            CONV_TG_F3ST1_K_SIZE * CONV_TG_F3ST1_DST_SIZE;
+            CONV_TG_F3S1_K_SIZE * CONV_TG_F3S1_DST_SIZE;
     }
     if (i < channels)
     {
-        conv_tg_f3st1_src_trans_wmax(src_pad,
+        conv_tg_f3s1_src_trans_wmax(src_pad,
             src_pad_h, channels - i, src_trans_d);
     }
 
-    for (i = 0; i <= num_outs - CONV_TG_F3ST1_M_SIZE;
-        i += CONV_TG_F3ST1_M_SIZE)
+    for (i = 0; i <= num_outs - CONV_TG_F3S1_M_SIZE;
+        i += CONV_TG_F3S1_M_SIZE)
     {
         src_trans_d = src_trans;
 
-        memset(dst_trans, 0, src_trans_h * CONV_TG_F3ST1_M_SIZE *
-            CONV_TG_F3ST1_DST_SIZE * sizeof(float));
+        memset(dst_trans, 0, src_trans_h * CONV_TG_F3S1_M_SIZE *
+            CONV_TG_F3S1_DST_SIZE * sizeof(float));
 
-        for (j = 0; j <= k - CONV_TG_F3ST1_K_SIZE;
-            j += CONV_TG_F3ST1_K_SIZE)
+        for (j = 0; j <= k - CONV_TG_F3S1_K_SIZE;
+            j += CONV_TG_F3S1_K_SIZE)
         {
-            sgemm_small_arm(CONV_TG_F3ST1_M_SIZE,
-                src_trans_h * CONV_TG_F3ST1_DST_SIZE,
-                CONV_TG_F3ST1_K_SIZE, filters_cvt,
+            sgemm_kernel_fp32_m1(CONV_TG_F3S1_M_SIZE,
+                src_trans_h * CONV_TG_F3S1_DST_SIZE,
+                CONV_TG_F3S1_K_SIZE, filters_cvt,
                 src_trans_d, dst_trans);
 
-            filters_cvt += CONV_TG_F3ST1_M_SIZE * CONV_TG_F3ST1_K_SIZE;
-            src_trans_d += CONV_TG_F3ST1_K_SIZE *
-                src_trans_h * CONV_TG_F3ST1_DST_SIZE;
+            filters_cvt += CONV_TG_F3S1_M_SIZE * CONV_TG_F3S1_K_SIZE;
+            src_trans_d += CONV_TG_F3S1_K_SIZE *
+                src_trans_h * CONV_TG_F3S1_DST_SIZE;
         }
         if (j < k)
         {
-            sgemm_small_arm(CONV_TG_F3ST1_M_SIZE,
-                src_trans_h * CONV_TG_F3ST1_DST_SIZE,
+            sgemm_kernel_fp32_m1(CONV_TG_F3S1_M_SIZE,
+                src_trans_h * CONV_TG_F3S1_DST_SIZE,
                 k_pad - j, filters_cvt, src_trans_d,
                 dst_trans);
 
-            filters_cvt += (k_pad - j) * CONV_TG_F3ST1_M_SIZE;
+            filters_cvt += (k_pad - j) * CONV_TG_F3S1_M_SIZE;
         }
 
-        conv_tg_f3st1_dst_trans_wmax(dst_trans, src_trans_h,
-            CONV_TG_F3ST1_M_SIZE, bias + i, dst_h, dst_w, dst);
+        conv_tg_f3s1_dst_trans_wmax(dst_trans, src_trans_h,
+            CONV_TG_F3S1_M_SIZE, bias + i, dst_h, dst_w, dst);
 
-        dst += dst_h * dst_w * CONV_TG_F3ST1_M_SIZE;
+        dst += dst_h * dst_w * CONV_TG_F3S1_M_SIZE;
     }
     if (i < num_outs)
     {
@@ -878,32 +878,32 @@ static void conv_tg_f3st1_one_pad_wmax(float *src_pad,
         src_trans_d = src_trans;
 
         memset(dst_trans, 0, src_trans_h * m_pad *
-            CONV_TG_F3ST1_DST_SIZE * sizeof(float));
+            CONV_TG_F3S1_DST_SIZE * sizeof(float));
 
-        for (j = 0; j <= k - CONV_TG_F3ST1_K_SIZE;
-            j += CONV_TG_F3ST1_K_SIZE)
+        for (j = 0; j <= k - CONV_TG_F3S1_K_SIZE;
+            j += CONV_TG_F3S1_K_SIZE)
         {
-            sgemm_small_arm(m_pad, src_trans_h *
-                CONV_TG_F3ST1_DST_SIZE, CONV_TG_F3ST1_K_SIZE,
+            sgemm_kernel_fp32_m1(m_pad, src_trans_h *
+                CONV_TG_F3S1_DST_SIZE, CONV_TG_F3S1_K_SIZE,
                 filters_cvt, src_trans_d, dst_trans);
 
-            filters_cvt += m_pad * CONV_TG_F3ST1_K_SIZE;
-            src_trans_d += CONV_TG_F3ST1_K_SIZE *
-                src_trans_h * CONV_TG_F3ST1_DST_SIZE;
+            filters_cvt += m_pad * CONV_TG_F3S1_K_SIZE;
+            src_trans_d += CONV_TG_F3S1_K_SIZE *
+                src_trans_h * CONV_TG_F3S1_DST_SIZE;
         }
         if (j < k)
         {
-            sgemm_small_arm(m_pad, src_trans_h *
-                CONV_TG_F3ST1_DST_SIZE, k_pad - j,
+            sgemm_kernel_fp32_m1(m_pad, src_trans_h *
+                CONV_TG_F3S1_DST_SIZE, k_pad - j,
                 filters_cvt, src_trans_d, dst_trans);
         }
 
-        conv_tg_f3st1_dst_trans_wmax(dst_trans, src_trans_h,
+        conv_tg_f3s1_dst_trans_wmax(dst_trans, src_trans_h,
             num_outs - i, bias + i, dst_h, dst_w, dst);
     }
 }
 
-static void conv_tg_f3st1_one_pad(float *src_pad,
+static void conv_tg_f3s1_one_pad(float *src_pad,
     int src_pad_h,
     int src_pad_w,
     int channels,
@@ -933,53 +933,53 @@ static void conv_tg_f3st1_one_pad(float *src_pad,
     for (i = 0; i <= channels - CONV_TG_F3_CHN_SIZE;
         i += CONV_TG_F3_CHN_SIZE)
     {
-        conv_tg_f3st1_src_trans(src_pad, src_pad_h,
+        conv_tg_f3s1_src_trans(src_pad, src_pad_h,
             src_pad_w, CONV_TG_F3_CHN_SIZE, buffer,
             src_trans_d);
 
         src_pad += src_pad_h * src_pad_w *
             CONV_TG_F3_CHN_SIZE;
-        src_trans_d += n_pad * CONV_TG_F3ST1_K_SIZE;
+        src_trans_d += n_pad * CONV_TG_F3S1_K_SIZE;
     }
     if (i < channels)
     {
-        conv_tg_f3st1_src_trans(src_pad, src_pad_h,
+        conv_tg_f3s1_src_trans(src_pad, src_pad_h,
             src_pad_w, channels - i, buffer, src_trans_d);
     }
 
-    for (i = 0; i <= num_outs - CONV_TG_F3ST1_M_SIZE;
-        i += CONV_TG_F3ST1_M_SIZE)
+    for (i = 0; i <= num_outs - CONV_TG_F3S1_M_SIZE;
+        i += CONV_TG_F3S1_M_SIZE)
     {
         src_trans_d = src_trans;
 
         memset(dst_trans, 0,
-            n_pad * CONV_TG_F3ST1_M_SIZE * sizeof(float));
+            n_pad * CONV_TG_F3S1_M_SIZE * sizeof(float));
 
-        for (j = 0; j <= k - CONV_TG_F3ST1_K_SIZE;
-            j += CONV_TG_F3ST1_K_SIZE)
+        for (j = 0; j <= k - CONV_TG_F3S1_K_SIZE;
+            j += CONV_TG_F3S1_K_SIZE)
         {
-            sgemm_small_arm(CONV_TG_F3ST1_M_SIZE, n_pad,
-                CONV_TG_F3ST1_K_SIZE, filters_cvt,
+            sgemm_kernel_fp32_m1(CONV_TG_F3S1_M_SIZE, n_pad,
+                CONV_TG_F3S1_K_SIZE, filters_cvt,
                 src_trans_d, dst_trans);
 
-            filters_cvt += CONV_TG_F3ST1_M_SIZE *
-                CONV_TG_F3ST1_K_SIZE;
-            src_trans_d += n_pad * CONV_TG_F3ST1_K_SIZE;
+            filters_cvt += CONV_TG_F3S1_M_SIZE *
+                CONV_TG_F3S1_K_SIZE;
+            src_trans_d += n_pad * CONV_TG_F3S1_K_SIZE;
         }
         if (j < k)
         {
-            sgemm_small_arm(CONV_TG_F3ST1_M_SIZE, n_pad,
+            sgemm_kernel_fp32_m1(CONV_TG_F3S1_M_SIZE, n_pad,
                 k_pad - j, filters_cvt, src_trans_d,
                 dst_trans);
 
-            filters_cvt += (k_pad - j) * CONV_TG_F3ST1_M_SIZE;
+            filters_cvt += (k_pad - j) * CONV_TG_F3S1_M_SIZE;
         }
 
-        conv_tg_f3st1_dst_trans(dst_trans, src_trans_h,
-            src_trans_w, CONV_TG_F3ST1_M_SIZE, bias + i,
+        conv_tg_f3s1_dst_trans(dst_trans, src_trans_h,
+            src_trans_w, CONV_TG_F3S1_M_SIZE, bias + i,
             buffer, dst_h, dst_w, dst);
 
-        dst += dst_h * dst_w * CONV_TG_F3ST1_M_SIZE;
+        dst += dst_h * dst_w * CONV_TG_F3S1_M_SIZE;
     }
     if (i < num_outs)
     {
@@ -988,28 +988,28 @@ static void conv_tg_f3st1_one_pad(float *src_pad,
 
         memset(dst_trans, 0, n_pad * m_pad * sizeof(float));
 
-        for (j = 0; j <= k - CONV_TG_F3ST1_K_SIZE;
-            j += CONV_TG_F3ST1_K_SIZE)
+        for (j = 0; j <= k - CONV_TG_F3S1_K_SIZE;
+            j += CONV_TG_F3S1_K_SIZE)
         {
-            sgemm_small_arm(m_pad, n_pad, CONV_TG_F3ST1_K_SIZE,
+            sgemm_kernel_fp32_m1(m_pad, n_pad, CONV_TG_F3S1_K_SIZE,
                 filters_cvt, src_trans_d, dst_trans);
 
-            filters_cvt += m_pad * CONV_TG_F3ST1_K_SIZE;
-            src_trans_d += n_pad * CONV_TG_F3ST1_K_SIZE;
+            filters_cvt += m_pad * CONV_TG_F3S1_K_SIZE;
+            src_trans_d += n_pad * CONV_TG_F3S1_K_SIZE;
         }
         if (j < k)
         {
-            sgemm_small_arm(m_pad, n_pad, k_pad - j,
+            sgemm_kernel_fp32_m1(m_pad, n_pad, k_pad - j,
                 filters_cvt, src_trans_d, dst_trans);
         }
 
-        conv_tg_f3st1_dst_trans(dst_trans, src_trans_h,
+        conv_tg_f3s1_dst_trans(dst_trans, src_trans_h,
             src_trans_w, num_outs - i, bias + i, buffer,
             dst_h, dst_w, dst);
     }
 }
 
-void conv_tg_f3st1_arm(float *src,
+void conv_tile_gemm_f3s1_m1(float *src,
     int src_h,
     int src_w,
     int channels,
@@ -1034,9 +1034,9 @@ void conv_tg_f3st1_arm(float *src,
     int m_pad = TG_PADDING(num_outs, 4);
 
     int buffer_len =
-        MAX_INT(CONV_TG_REG_M_SIZE * CONV_TG_F3ST1_N_SIZE,
-            3 * 3 * CONV_TG_F3ST1_N_SIZE);
-    int src_trans_len = k_pad * CONV_TG_F3ST1_N_SIZE;
+        MAX_INT(CONV_TG_REG_M_SIZE * CONV_TG_F3S1_N_SIZE,
+            3 * 3 * CONV_TG_F3S1_N_SIZE);
+    int src_trans_len = k_pad * CONV_TG_F3S1_N_SIZE;
 
     float *buffer = (float*)temp_buffer;
     float *src_trans = buffer + buffer_len;
@@ -1062,16 +1062,16 @@ void conv_tg_f3st1_arm(float *src,
         int real_dst_h = real_src_h - 3 + 1;
         int real_dst_w = real_src_w - 3 + 1;
 
-        if (real_src_w == CONV_TG_F3ST1_SRC_SIZE)
+        if (real_src_w == CONV_TG_F3S1_SRC_SIZE)
         {
-            conv_tg_f3st1_one_pad_wmax(src_pad, real_src_h,
+            conv_tg_f3s1_one_pad_wmax(src_pad, real_src_h,
                 channels, src_trans, filters_cvt, dst_trans,
                 bias, num_outs, dst_pad_h, dst_pad_w,
                 dst + h_dst_idx * dst_pad_w + w_dst_idx);
         }
         else
         {
-            conv_tg_f3st1_one_pad(src_pad, real_src_h,
+            conv_tg_f3s1_one_pad(src_pad, real_src_h,
                 real_src_w, channels, src_trans, filters_cvt,
                 dst_trans, bias, num_outs, buffer, dst_pad_h,
                 dst_pad_w, dst + h_dst_idx * dst_pad_w + w_dst_idx);
