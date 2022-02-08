@@ -154,7 +154,7 @@ int main(int argc, char *argv[])
 
     struct timeval start, end;
     long long comp = 2LL * 3 * 3 * dst_h * dst_w * in_c * out_c;
-    int loop_time = (int)(1e11 / comp) + 1;
+    int loop_time = (int)(2e11 / comp) + 1;
     double time, gflops;
     int i;
 

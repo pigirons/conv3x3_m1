@@ -4,6 +4,24 @@
 #include <cstring>
 #include <arm_neon.h>
 
+#define MAX_INT(A, B) ((A) < (B) ? (B) : (A))
+#define MIN_INT(A, B) ((A) < (B) ? (A) : (B))
+#define WINO_PADDING(SIZE, ALIGN) (((SIZE) + (ALIGN) - 1) / (ALIGN) * (ALIGN))
+#define CONV_TRANSPOSE_4X4(Q0, Q1, Q2, Q3) \
+{ \
+    float32x4x2_t __Q0, __Q1; \
+    __Q0 = vtrnq_f32(Q0, Q1); \
+    __Q1 = vtrnq_f32(Q2, Q3); \
+    Q0 = vcombine_f32(vget_low_f32(__Q0.val[0]), \
+        vget_low_f32(__Q1.val[0])); \
+    Q1 = vcombine_f32(vget_low_f32(__Q0.val[1]), \
+        vget_low_f32(__Q1.val[1])); \
+    Q2 = vcombine_f32(vget_high_f32(__Q0.val[0]), \
+        vget_high_f32(__Q1.val[0])); \
+    Q3 = vcombine_f32(vget_high_f32(__Q0.val[1]), \
+        vget_high_f32(__Q1.val[1])); \
+}
+
 extern void sgemm_kernel_fp32_m1(int,
     int,
     int,
